@@ -14,6 +14,10 @@
 
 #include <list>
 #include <string>
+#include <iostream>
+#include <chrono>
+#include <atomic>
+#include <cctype>
 
 #include <curl/curl.h>
 
