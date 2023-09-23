@@ -18,6 +18,7 @@
 #include <chrono>
 #include <atomic>
 #include <cctype>
+#include <algorithm>
 
 #include <curl/curl.h>
 

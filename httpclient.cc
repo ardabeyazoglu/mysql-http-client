@@ -2,6 +2,7 @@
 #define NO_SIGNATURE_CHANGE 0
 #define SIGNATURE_CHANGE 1
 
+#include <iostream>
 #include <components/httpclient/httpclient.h>
 
 REQUIRES_SERVICE_PLACEHOLDER(log_builtins);
@@ -31,7 +32,7 @@ static SHOW_VAR httpclient_status_variables[] = {
 };
 
 // configure curl options using mysql variables
-static char *var_curl_method = "GET";
+static long var_curl_timeout_ms = 30000;
 
 // Status of registration of the system variable. Note that there should
 // be multiple such flags, if more system variables are intoduced, so
@@ -79,7 +80,7 @@ class udf_list {
       return true;
     }
 
-} * list;
+} * my_udf_list;
 
 int register_status_variables() {
   if (mysql_service_status_variable_registration->register_variable((SHOW_VAR *)&httpclient_status_variables)) {
@@ -115,17 +116,23 @@ static bool register_system_variables() {
   STR_CHECK_ARG(str) str_arg;
   str_arg.def_val = nullptr;
 
+  INTEGRAL_CHECK_ARG(ulong) ulong_arg;
+  ulong_arg.def_val = 30000;
+  ulong_arg.min_val = 0;
+  ulong_arg.max_val = 300000;
+  ulong_arg.blk_sz = 0;
+
   if (mysql_service_component_sys_variable_register->register_variable(
-      "httpclient", "var_curl_method",
-      PLUGIN_VAR_STR | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_NOPERSIST,
-      "curl request http verb", 
-      nullptr,
-      nullptr, 
-      (void *)&str_arg,
-      (void *)&var_curl_method
+        "httpclient", "var_curl_timeout_ms",
+        PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_NOPERSIST,
+        "curl request http verb", 
+        nullptr,
+        nullptr, 
+        (void *)&ulong_arg,
+        (void *)&var_curl_timeout_ms
       )
   ) {
-    std::string msg{"httpclient.var_curl_method register failed."};
+    std::string msg{"httpclient.var_curl_timeout_ms register failed."};
     LogEvent()
         .type(LOG_TYPE_ERROR)
         .prio(ERROR_LEVEL)
@@ -136,6 +143,8 @@ static bool register_system_variables() {
 
   // System variable is registered successfully.
   httpclient_component_sys_var_registered = true;
+
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "System variables has been registered successfully.");
 
   return (false);
 }
@@ -148,13 +157,13 @@ static bool register_system_variables() {
   @retval true failure
 */
 static bool unregister_system_variables() {
-  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "var_curl_method")) {
+  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "var_curl_timeout_ms")) {
     if (!httpclient_component_sys_var_registered) {
       // System variable is already un-registered.
       return (false);
     }
 
-    std::string msg{"httpclient.var_curl_method unregister failed."};
+    std::string msg{"httpclient.var_curl_timeout_ms unregister failed."};
     LogEvent()
         .type(LOG_TYPE_ERROR)
         .prio(ERROR_LEVEL)
@@ -183,7 +192,8 @@ namespace udf_impl {
   }
 
   static void httpclient_udf_deinit(__attribute__((unused)) UDF_INIT *initid) {
-    assert(initid->ptr == udf_init || initid->ptr == my_udf);
+    assert(initid->ptr == udf_impl::udf_init || initid->ptr == udf_impl::my_udf);
+    free(initid->ptr);
   }
 
   bool has_privilege(void *opaque_thd) {
@@ -208,26 +218,41 @@ namespace udf_impl {
     return total_size;
   }
 
-  bool perform_curl_request(const char *url, std::string &response) {
+  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* content_type = "application/x-www-form-urlencoded") {
     CURL *curl = curl_easy_init();
     if (!curl) {
-        return false;
+      return false;
     }
 
-    // Set the URL for the request
+    // set request method and url
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
-    if (var_curl_method == "POST") {
+    std::string method_upper = method;
+    std::transform(method_upper.begin(), method_upper.end(), method_upper.begin(), ::toupper);
+
+    if (method_upper == "POST") {
       curl_easy_setopt(curl, CURLOPT_POST, 1);
     }
-    else if (var_curl_method == "GET") {
-      curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+    else if (method_upper == "PUT" || method_upper == "PATCH" || method_upper == "DELETE") {
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method_upper);
     }
     else {
-      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, var_curl_method);
+      curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
     }
 
-    // Set the callback function for writing the response data
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
+
+    // set headers
+    struct curl_slist *headers = NULL;
+    std::string header = "Content-Type: " + std::string(content_type);
+    headers = curl_slist_append(headers, header.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    // set other defined curl options
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, var_curl_timeout_ms);
+
+    // set the callback function for writing the response data
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     
@@ -235,15 +260,27 @@ namespace udf_impl {
     auto start_time = std::chrono::steady_clock::now();
     CURLcode res = curl_easy_perform(curl);
     auto end_time = std::chrono::steady_clock::now();
+
+    long http_status_code;
+    const char *http_error_message;
+
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
+    if (res != CURLE_OK) {
+      http_error_message = curl_easy_strerror(res);
+    }
     
-    // cleanup curl
     curl_easy_cleanup(curl);
 
-    std::string msg = var_curl_method;
-    msg += " request sent to ";
-    msg += url;
-
-    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+    // log to mysql error log
+    if (res != CURLE_OK) {
+      std::string msg = std::string(method) + " " + std::string(url) + " failed with error code " + std::to_string(http_status_code) + ": " + std::string(http_error_message);
+      LogComponentErr(WARNING_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+      response.assign("Error Code=" + std::to_string(http_status_code) + "; Message=" + std::string(http_error_message));
+    }
+    else {
+      std::string msg = std::string(method) + " " + std::string(url) + " returned status code " + std::to_string(http_status_code);
+      LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+    }
 
     auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     time_spent += elapsed_time;
@@ -256,31 +293,34 @@ namespace udf_impl {
     mysql_service_mysql_current_thread_reader->get(&thd);
 
     if (!has_privilege(thd)) {
-       mysql_error_service_printf(ER_SPECIFIC_ACCESS_DENIED_ERROR, 0, HTTPCLIENT_PRIVILEGE_NAME);
-       *error = 1;
-       *is_null = 1;
-       return 0;
+      mysql_error_service_printf(ER_SPECIFIC_ACCESS_DENIED_ERROR, 0, HTTPCLIENT_PRIVILEGE_NAME);
+      *error = 1;
+      *is_null = 1;
+      return 0;
     }
 
     // Prepare the URL for the HTTP request
-    const char *url = args->args[0];
+    const char *request_method = args->args[0];
+    const char *request_url = args->args[1];
+    const char *request_body = args->args[2];
+    const char *request_content_type = args->args[3];
     
     // Perform the HTTP request
     // Note: This is a simplified example. In a production scenario, consider using a proper HTTP library.
     std::string response;
-    if (perform_curl_request(url, response)) {
+    if (perform_curl_request(response, request_method, request_url, request_body, request_content_type)) {
       // Copy the response to the output buffer
-      strncpy(outp, response.c_str(), response.size());
+      initid->ptr = strdup(response.c_str());
       *length = response.size();
     } 
     else {
       // If the request fails, return an error message
-      const char *error_message = "HTTP request failed";
-      strncpy(outp, error_message, strlen(error_message));
-      *length = strlen(error_message);
+      auto error_message = "HTTP request failed: " + response;
+      initid->ptr = strdup(error_message.c_str());
+      *length = error_message.size();
     }
     
-    return outp;
+    return initid->ptr;
   }
 }
 
@@ -303,11 +343,11 @@ static mysql_service_status_t httpclient_service_init() {
     LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "new privilege 'HTTP_CLIENT' has been registered successfully.");
   }
 
-  list = new udf_list();
+  my_udf_list = new udf_list();
 
-  if (list->add_scalar("http_request", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
+  if (my_udf_list->add_scalar("http_request", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
     // failure: UDF registration failed
-    delete list;
+    delete my_udf_list;
     return 1;
   }
 
@@ -330,11 +370,11 @@ static mysql_service_status_t httpclient_service_deinit() {
   }
 
   // failure: some UDFs still in use
-  if (list->unregister()) {
+  if (my_udf_list->unregister()) {
     return 1;
   }
 
-  delete list;
+  delete my_udf_list;
 
   unregister_system_variables();
 

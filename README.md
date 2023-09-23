@@ -40,12 +40,12 @@ This component extends MySQL with http/curl support and installs an `http_reques
 
 ## Usage
 
-    # example http requests (GET by default)
-    mysql> SELECT http_request("https://dummyjson.com/products?limit=1");
-    mysql> SELECT /*+ VAR_CURL_METHOD='POST' */ http_request('https://dummyjson.com/products?limit=1');
+    # example http requests
+    mysql> SELECT http_request('GET', 'https://dummyjson.com/products?limit=1');
+    mysql> SELECT /*+ VAR_CURL_TIMEOUT=1 */ http_request('GET', 'https://dummyjson.com/products?limit=1');
 
     # example using json parser
-    mysql> SELECT JSON_VALUE(http_request("https://dummyjson.com/products?limit=1"), '$.products[0].description');
+    mysql> SELECT JSON_VALUE(http_request('GET', 'https://dummyjson.com/products?limit=1'), '$.products[0].description');
 
     # time spent in http requests
     mysql> SHOW GLOBAL STATUS LIKE '%time_spent%';
