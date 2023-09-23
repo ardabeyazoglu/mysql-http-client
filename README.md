@@ -9,8 +9,11 @@ This component extends MySQL with http/curl support and installs an `http_reques
     # debian, ubuntu etc.
     sudo apt install cmake clang bison libbison-dev libncurses5-dev
 
+    # osx
+    brew install bison ncurses curl cmake clang
+
     # download mysql-server source code
-    git clone --single-branch=8.1.0d https://github.com/mysql/mysql-server
+    git clone --single-branch --branch=8.1.0 https://github.com/mysql/mysql-server
 
 ## Build
 
