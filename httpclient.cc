@@ -11,12 +11,14 @@ REQUIRES_SERVICE_PLACEHOLDER(dynamic_privilege_register);
 REQUIRES_SERVICE_PLACEHOLDER(udf_registration);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_udf_metadata);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_thd_security_context);
+REQUIRES_SERVICE_PLACEHOLDER(mysql_thd_store);
 REQUIRES_SERVICE_PLACEHOLDER(global_grants_check);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_current_thread_reader);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_runtime_error);
 REQUIRES_SERVICE_PLACEHOLDER(status_variable_registration);
 REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_register);
 REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_unregister);
+REQUIRES_SERVICE_PLACEHOLDER(system_variable_source);
 
 SERVICE_TYPE(log_builtins) * log_bi;
 SERVICE_TYPE(log_builtins_string) * log_bs;
@@ -33,6 +35,8 @@ static SHOW_VAR httpclient_status_variables[] = {
 
 // configure curl options using mysql variables
 static long var_curl_timeout_ms = 30000;
+static long global_var_curl_followlocation;
+thread_local static long var_curl_followlocation;
 
 // Status of registration of the system variable. Note that there should
 // be multiple such flags, if more system variables are intoduced, so
@@ -100,6 +104,13 @@ int unregister_status_variables() {
   return 0;
 }
 
+static void update_variable_test(MYSQL_THD thd [[maybe_unused]], SYS_VAR *self [[maybe_unused]], void *var_ptr, const void *save) {
+  const long new_val = *(static_cast<const long *>(const_cast<void *>(save)));
+  var_curl_followlocation = new_val;
+
+  *(static_cast<long *>(var_ptr)) = *(static_cast<const long *>(save));
+}
+
 /**
   Register the server system variables defined by this component.
 
@@ -113,32 +124,60 @@ static bool register_system_variables() {
     return (false);
   }
 
-  STR_CHECK_ARG(str) str_arg;
-  str_arg.def_val = nullptr;
+  // defined different scopes for each variable otherwise INTEGRAL_CHECK_ARG produces error for same type
+  {
+    INTEGRAL_CHECK_ARG(ulong) timeout_ms_arg;
+    timeout_ms_arg.def_val = 30000;
+    timeout_ms_arg.min_val = 0;
+    timeout_ms_arg.max_val = 300000;
+    timeout_ms_arg.blk_sz = 0;
 
-  INTEGRAL_CHECK_ARG(ulong) ulong_arg;
-  ulong_arg.def_val = 30000;
-  ulong_arg.min_val = 0;
-  ulong_arg.max_val = 300000;
-  ulong_arg.blk_sz = 0;
+    // register curl timeout variable
+    if (mysql_service_component_sys_variable_register->register_variable(
+          "httpclient", "curlopt_timeout_ms",
+          PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NOPERSIST,
+          "curl request timeout in milliseconds", 
+          nullptr,
+          nullptr, 
+          (void *)&timeout_ms_arg,
+          (void *)&var_curl_timeout_ms
+        )
+    ) {
+      LogEvent()
+          .type(LOG_TYPE_ERROR)
+          .prio(ERROR_LEVEL)
+          .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_timeout_ms register failed.");
+      
+      return (true);
+    }
+  }
 
-  if (mysql_service_component_sys_variable_register->register_variable(
-        "httpclient", "var_curl_timeout_ms",
-        PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_NOPERSIST,
-        "curl request http verb", 
-        nullptr,
-        nullptr, 
-        (void *)&ulong_arg,
-        (void *)&var_curl_timeout_ms
-      )
-  ) {
-    std::string msg{"httpclient.var_curl_timeout_ms register failed."};
-    LogEvent()
-        .type(LOG_TYPE_ERROR)
-        .prio(ERROR_LEVEL)
-        .lookup(ER_MYSQLBACKUP_MSG, msg.c_str());
-    
-    return (true);
+  {
+    INTEGRAL_CHECK_ARG(ulong) follow_location_arg;
+    follow_location_arg.def_val = 1;
+    follow_location_arg.min_val = 0;
+    follow_location_arg.max_val = 1;
+    follow_location_arg.blk_sz = 0;
+
+    // register follow redirect variable
+    if (mysql_service_component_sys_variable_register->register_variable(
+          "httpclient", "curlopt_followlocation",
+          PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NOPERSIST | PLUGIN_VAR_THDLOCAL,
+          "curl request follow redirects", 
+          nullptr,
+          update_variable_test, 
+          (void *)&follow_location_arg,
+          nullptr
+        )
+    ) {
+      std::string msg{};
+      LogEvent()
+          .type(LOG_TYPE_ERROR)
+          .prio(ERROR_LEVEL)
+          .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_followlocation register failed.");
+      
+      return (true);
+    }
   }
 
   // System variable is registered successfully.
@@ -157,21 +196,31 @@ static bool register_system_variables() {
   @retval true failure
 */
 static bool unregister_system_variables() {
-  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "var_curl_timeout_ms")) {
+  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "curlopt_timeout_ms")) {
     if (!httpclient_component_sys_var_registered) {
-      // System variable is already un-registered.
       return (false);
     }
 
-    std::string msg{"httpclient.var_curl_timeout_ms unregister failed."};
     LogEvent()
         .type(LOG_TYPE_ERROR)
         .prio(ERROR_LEVEL)
-        .lookup(ER_MYSQLBACKUP_MSG, msg.c_str());
+        .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_timeout_ms unregister failed.");
     return (true);
   }
 
-  // System variable is un-registered successfully.
+  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "curlopt_followlocation")) {
+    if (!httpclient_component_sys_var_registered) {
+      return (false);
+    }
+
+    LogEvent()
+        .type(LOG_TYPE_ERROR)
+        .prio(ERROR_LEVEL)
+        .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_followlocation unregister failed.");
+    return (true);
+  }
+
+  // system variables are un-registered
   httpclient_component_sys_var_registered = false;
 
   return (false);
@@ -251,6 +300,7 @@ namespace udf_impl {
 
     // set other defined curl options
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, var_curl_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, var_curl_followlocation);
 
     // set the callback function for writing the response data
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -304,9 +354,30 @@ namespace udf_impl {
     const char *request_url = args->args[1];
     const char *request_body = args->args[2];
     const char *request_content_type = args->args[3];
-    
-    // Perform the HTTP request
-    // Note: This is a simplified example. In a production scenario, consider using a proper HTTP library.
+
+    {
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test0");
+      long * buffer;
+      size_t len = sizeof(buffer);
+      mysql_service_component_sys_variable_register->get_variable(LOG_COMPONENT_TAG, "curlopt_followlocation", (void **)&buffer, &len);
+
+      enum enum_variable_source source;
+      mysql_service_system_variable_source->get("httpclient.curlopt_followlocation", 2, &source);
+
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test1");
+      std::string buffer_str = std::to_string(*buffer);
+      const char* test = buffer_str.c_str();
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, test);
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test2");
+    }
+
+    {
+      std::string buffer_str = std::to_string(var_curl_followlocation);
+      const char* buffer_str_char = buffer_str.c_str();
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, buffer_str_char);
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test3");
+    }
+
     std::string response;
     if (perform_curl_request(response, request_method, request_url, request_body, request_content_type)) {
       // Copy the response to the output buffer
@@ -398,6 +469,8 @@ BEGIN_COMPONENT_REQUIRES(httpclient_service)
   REQUIRES_SERVICE(mysql_runtime_error),
   REQUIRES_SERVICE(status_variable_registration),
   REQUIRES_SERVICE(component_sys_variable_register),
+  REQUIRES_SERVICE(component_sys_variable_unregister),
+  REQUIRES_SERVICE(system_variable_source),
 END_COMPONENT_REQUIRES();
 
 // A list of metadata to describe the Component.
