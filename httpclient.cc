@@ -143,13 +143,15 @@ static void update_variable_followlocation(MYSQL_THD thd [[maybe_unused]], SYS_V
   */
 
   const long new_val = *(static_cast<const long *>(save));
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "new httpclient.followlocation");
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "setting httpclient.followlocation to ");
 
   auto x = std::to_string(new_val);
   LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, x.c_str());
 
   *(static_cast<long *>(var_ptr)) = new_val;
 
+  // PROBLEM: cant find a way to assign global_var_curl_followlocation if this is set global
+  // right now whenever set command is called for this variable, it changes thread-local variable here - which is not correct
   var_curl_followlocation = new_val;
 }
 
