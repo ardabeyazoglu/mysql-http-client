@@ -12,9 +12,6 @@
 #include <mysql/components/services/mysql_runtime_error_service.h>
 #include <mysql/components/services/component_status_var_service.h>
 #include <mysql/components/services/component_sys_var_service.h>
-#include <mysql/components/services/system_variable_source_type.h>
-#include <mysql/components/services/system_variable_source.h>
-#include <mysql/plugin.h>
 
 #include <list>
 #include <string>
@@ -39,7 +36,6 @@ extern REQUIRES_SERVICE_PLACEHOLDER(mysql_runtime_error);
 extern REQUIRES_SERVICE_PLACEHOLDER(status_variable_registration);
 extern REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_register);
 extern REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_unregister);
-extern REQUIRES_SERVICE_PLACEHOLDER(system_variable_source);
 
 extern SERVICE_TYPE(log_builtins) * log_bi;
 extern SERVICE_TYPE(log_builtins_string) * log_bs;

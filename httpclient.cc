@@ -18,7 +18,6 @@ REQUIRES_SERVICE_PLACEHOLDER(mysql_runtime_error);
 REQUIRES_SERVICE_PLACEHOLDER(status_variable_registration);
 REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_register);
 REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_unregister);
-REQUIRES_SERVICE_PLACEHOLDER(system_variable_source);
 
 SERVICE_TYPE(log_builtins) * log_bi;
 SERVICE_TYPE(log_builtins_string) * log_bs;
@@ -340,7 +339,7 @@ namespace udf_impl {
     // set headers
     struct curl_slist *headers = NULL;
     const char * default_content_type = "application/x-www-form-urlencoded";
-    std::string header = "Content-Type: " + std::string(content_type == "" ? default_content_type : content_type);
+    std::string header = "Content-Type: " + std::string((strcmp(content_type, "") == 0) ? default_content_type : content_type);
     headers = curl_slist_append(headers, header.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
@@ -496,7 +495,6 @@ BEGIN_COMPONENT_REQUIRES(httpclient_service)
   REQUIRES_SERVICE(status_variable_registration),
   REQUIRES_SERVICE(component_sys_variable_register),
   REQUIRES_SERVICE(component_sys_variable_unregister),
-  REQUIRES_SERVICE(system_variable_source),
 END_COMPONENT_REQUIRES();
 
 // A list of metadata to describe the Component.
