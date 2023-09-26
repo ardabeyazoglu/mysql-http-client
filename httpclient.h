@@ -21,8 +21,12 @@
 #include <atomic>
 #include <cctype>
 #include <algorithm>
+#include <map>
+#include <tuple>
+#include <utility>
 
 #include <curl/curl.h>
+#include <nlohmann/json.hpp>
 
 extern REQUIRES_SERVICE_PLACEHOLDER(log_builtins);
 extern REQUIRES_SERVICE_PLACEHOLDER(log_builtins_string);

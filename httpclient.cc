@@ -2,8 +2,9 @@
 #define NO_SIGNATURE_CHANGE 0
 #define SIGNATURE_CHANGE 1
 
-#include <iostream>
 #include <components/httpclient/httpclient.h>
+
+using json = nlohmann::json;
 
 REQUIRES_SERVICE_PLACEHOLDER(log_builtins);
 REQUIRES_SERVICE_PLACEHOLDER(log_builtins_string);
@@ -32,11 +33,168 @@ static SHOW_VAR httpclient_status_variables[] = {
    {nullptr, nullptr, SHOW_LONG, SHOW_SCOPE_GLOBAL}
 };
 
-// configure curl options using mysql variables
-static long var_curl_timeout_ms = 30000;
-
-thread_local static long var_curl_followlocation = 1;
-static long global_var_curl_followlocation = 1;
+static std::map<std::string, std::tuple<CURLoption, long>> curl_options_available = {
+  {"CURLOPT_ACCEPTTIMEOUT_MS", std::make_tuple(CURLOPT_ACCEPTTIMEOUT_MS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_ACCEPT_ENCODING", std::make_tuple(CURLOPT_ACCEPT_ENCODING, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_ADDRESS_SCOPE", std::make_tuple(CURLOPT_ADDRESS_SCOPE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_APPEND", std::make_tuple(CURLOPT_APPEND, CURLOPTTYPE_LONG)},
+  {"CURLOPT_AUTOREFERER", std::make_tuple(CURLOPT_AUTOREFERER, CURLOPTTYPE_LONG)},
+  {"CURLOPT_BUFFERSIZE", std::make_tuple(CURLOPT_BUFFERSIZE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_CAINFO", std::make_tuple(CURLOPT_CAINFO, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_CAPATH", std::make_tuple(CURLOPT_CAPATH, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_CERTINFO", std::make_tuple(CURLOPT_CERTINFO, CURLOPTTYPE_LONG)},
+  {"CURLOPT_CONNECTTIMEOUT", std::make_tuple(CURLOPT_CONNECTTIMEOUT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_CONNECTTIMEOUT_MS", std::make_tuple(CURLOPT_CONNECTTIMEOUT_MS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_CONNECT_ONLY", std::make_tuple(CURLOPT_CONNECT_ONLY, CURLOPTTYPE_LONG)},
+  {"CURLOPT_COOKIE", std::make_tuple(CURLOPT_COOKIE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_COOKIEFILE", std::make_tuple(CURLOPT_COOKIEFILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_COOKIEJAR", std::make_tuple(CURLOPT_COOKIEJAR, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_COOKIELIST", std::make_tuple(CURLOPT_COOKIELIST, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_COOKIESESSION", std::make_tuple(CURLOPT_COOKIESESSION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_COPYPOSTFIELDS", std::make_tuple(CURLOPT_COPYPOSTFIELDS, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_CRLF", std::make_tuple(CURLOPT_CRLF, CURLOPTTYPE_LONG)},
+  {"CURLOPT_CRLFILE", std::make_tuple(CURLOPT_CRLFILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_CUSTOMREQUEST", std::make_tuple(CURLOPT_CUSTOMREQUEST, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_DIRLISTONLY", std::make_tuple(CURLOPT_DIRLISTONLY, CURLOPTTYPE_LONG)},
+  {"CURLOPT_DNS_CACHE_TIMEOUT", std::make_tuple(CURLOPT_DNS_CACHE_TIMEOUT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_DNS_INTERFACE", std::make_tuple(CURLOPT_DNS_INTERFACE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_DNS_LOCAL_IP4", std::make_tuple(CURLOPT_DNS_LOCAL_IP4, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_DNS_LOCAL_IP6", std::make_tuple(CURLOPT_DNS_LOCAL_IP6, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_DNS_SERVERS", std::make_tuple(CURLOPT_DNS_SERVERS, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_DNS_USE_GLOBAL_CACHE", std::make_tuple(CURLOPT_DNS_USE_GLOBAL_CACHE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_DOH_URL", std::make_tuple(CURLOPT_DOH_URL, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_EGDSOCKET", std::make_tuple(CURLOPT_EGDSOCKET, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_EXPECT_100_TIMEOUT_MS", std::make_tuple(CURLOPT_EXPECT_100_TIMEOUT_MS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FAILONERROR", std::make_tuple(CURLOPT_FAILONERROR, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FILETIME", std::make_tuple(CURLOPT_FILETIME, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FOLLOWLOCATION", std::make_tuple(CURLOPT_FOLLOWLOCATION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FORBID_REUSE", std::make_tuple(CURLOPT_FORBID_REUSE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FRESH_CONNECT", std::make_tuple(CURLOPT_FRESH_CONNECT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTPAPPEND", std::make_tuple(CURLOPT_FTPAPPEND, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTPLISTONLY", std::make_tuple(CURLOPT_FTPLISTONLY, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTPPORT", std::make_tuple(CURLOPT_FTPPORT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_FTPSSLAUTH", std::make_tuple(CURLOPT_FTPSSLAUTH, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_ACCOUNT", std::make_tuple(CURLOPT_FTP_ACCOUNT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_FTP_ALTERNATIVE_TO_USER", std::make_tuple(CURLOPT_FTP_ALTERNATIVE_TO_USER, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_FTP_CREATE_MISSING_DIRS", std::make_tuple(CURLOPT_FTP_CREATE_MISSING_DIRS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_FILEMETHOD", std::make_tuple(CURLOPT_FTP_FILEMETHOD, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_RESPONSE_TIMEOUT", std::make_tuple(CURLOPT_FTP_RESPONSE_TIMEOUT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_SKIP_PASV_IP", std::make_tuple(CURLOPT_FTP_SKIP_PASV_IP, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_SSL", std::make_tuple(CURLOPT_FTP_SSL, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_SSL_CCC", std::make_tuple(CURLOPT_FTP_SSL_CCC, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_USE_EPRT", std::make_tuple(CURLOPT_FTP_USE_EPRT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_USE_EPSV", std::make_tuple(CURLOPT_FTP_USE_EPSV, CURLOPTTYPE_LONG)},
+  {"CURLOPT_FTP_USE_PRET", std::make_tuple(CURLOPT_FTP_USE_PRET, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HEADER", std::make_tuple(CURLOPT_HEADER, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTP09_ALLOWED", std::make_tuple(CURLOPT_HTTP09_ALLOWED, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTPAUTH", std::make_tuple(CURLOPT_HTTPAUTH, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTPGET", std::make_tuple(CURLOPT_HTTPGET, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTPPROXYTUNNEL", std::make_tuple(CURLOPT_HTTPPROXYTUNNEL, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTP_CONTENT_DECODING", std::make_tuple(CURLOPT_HTTP_CONTENT_DECODING, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTP_TRANSFER_DECODING", std::make_tuple(CURLOPT_HTTP_TRANSFER_DECODING, CURLOPTTYPE_LONG)},
+  {"CURLOPT_HTTP_VERSION", std::make_tuple(CURLOPT_HTTP_VERSION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_IGNORE_CONTENT_LENGTH", std::make_tuple(CURLOPT_IGNORE_CONTENT_LENGTH, CURLOPTTYPE_LONG)},
+  {"CURLOPT_INFILESIZE", std::make_tuple(CURLOPT_INFILESIZE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_INTERFACE", std::make_tuple(CURLOPT_INTERFACE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_IPRESOLVE", std::make_tuple(CURLOPT_IPRESOLVE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_ISSUERCERT", std::make_tuple(CURLOPT_ISSUERCERT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_KEYPASSWD", std::make_tuple(CURLOPT_KEYPASSWD, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_KRB4LEVEL", std::make_tuple(CURLOPT_KRB4LEVEL, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_LOCALPORT", std::make_tuple(CURLOPT_LOCALPORT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_LOCALPORTRANGE", std::make_tuple(CURLOPT_LOCALPORTRANGE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_LOW_SPEED_LIMIT", std::make_tuple(CURLOPT_LOW_SPEED_LIMIT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_LOW_SPEED_TIME", std::make_tuple(CURLOPT_LOW_SPEED_TIME, CURLOPTTYPE_LONG)},
+  {"CURLOPT_MAIL_FROM", std::make_tuple(CURLOPT_MAIL_FROM, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_MAXCONNECTS", std::make_tuple(CURLOPT_MAXCONNECTS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_MAXFILESIZE", std::make_tuple(CURLOPT_MAXFILESIZE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_MAXFILESIZE_LARGE", std::make_tuple(CURLOPT_MAXFILESIZE_LARGE, CURLOPTTYPE_OFF_T)},
+  {"CURLOPT_MAXREDIRS", std::make_tuple(CURLOPT_MAXREDIRS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_MAX_RECV_SPEED_LARGE", std::make_tuple(CURLOPT_MAX_RECV_SPEED_LARGE, CURLOPTTYPE_OFF_T)},
+  {"CURLOPT_MAX_SEND_SPEED_LARGE", std::make_tuple(CURLOPT_MAX_SEND_SPEED_LARGE, CURLOPTTYPE_OFF_T)},
+  {"CURLOPT_NETRC", std::make_tuple(CURLOPT_NETRC, CURLOPTTYPE_LONG)},
+  {"CURLOPT_NETRC_FILE", std::make_tuple(CURLOPT_NETRC_FILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_NEW_DIRECTORY_PERMS", std::make_tuple(CURLOPT_NEW_DIRECTORY_PERMS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_NEW_FILE_PERMS", std::make_tuple(CURLOPT_NEW_FILE_PERMS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_NOBODY", std::make_tuple(CURLOPT_NOBODY, CURLOPTTYPE_LONG)},
+  {"CURLOPT_NOPROGRESS", std::make_tuple(CURLOPT_NOPROGRESS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_NOPROXY", std::make_tuple(CURLOPT_NOPROXY, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_NOSIGNAL", std::make_tuple(CURLOPT_NOSIGNAL, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PATH_AS_IS", std::make_tuple(CURLOPT_PATH_AS_IS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PINNEDPUBLICKEY", std::make_tuple(CURLOPT_PINNEDPUBLICKEY, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_PIPEWAIT", std::make_tuple(CURLOPT_PIPEWAIT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PORT", std::make_tuple(CURLOPT_PORT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_POST", std::make_tuple(CURLOPT_POST, CURLOPTTYPE_LONG)},
+  {"CURLOPT_POSTFIELDS", std::make_tuple(CURLOPT_POSTFIELDS, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_POSTFIELDSIZE", std::make_tuple(CURLOPT_POSTFIELDSIZE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_POSTFIELDSIZE_LARGE", std::make_tuple(CURLOPT_POSTFIELDSIZE_LARGE, CURLOPTTYPE_OFF_T)},
+  {"CURLOPT_PROTOCOLS", std::make_tuple(CURLOPT_PROTOCOLS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PROXY", std::make_tuple(CURLOPT_PROXY, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_PROXYAUTH", std::make_tuple(CURLOPT_PROXYAUTH, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PROXYPASSWORD", std::make_tuple(CURLOPT_PROXYPASSWORD, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_PROXYPORT", std::make_tuple(CURLOPT_PROXYPORT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PROXYTYPE", std::make_tuple(CURLOPT_PROXYTYPE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_PROXYUSERNAME", std::make_tuple(CURLOPT_PROXYUSERNAME, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_PROXYUSERPWD", std::make_tuple(CURLOPT_PROXYUSERPWD, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_PUT", std::make_tuple(CURLOPT_PUT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RANDOM_FILE", std::make_tuple(CURLOPT_RANDOM_FILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_RANGE", std::make_tuple(CURLOPT_RANGE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_REDIR_PROTOCOLS", std::make_tuple(CURLOPT_REDIR_PROTOCOLS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RESUME_FROM", std::make_tuple(CURLOPT_RESUME_FROM, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RESUME_FROM_LARGE", std::make_tuple(CURLOPT_RESUME_FROM_LARGE, CURLOPTTYPE_OFF_T)},
+  {"CURLOPT_RTSP_CLIENT_CSEQ", std::make_tuple(CURLOPT_RTSP_CLIENT_CSEQ, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RTSP_REQUEST", std::make_tuple(CURLOPT_RTSP_REQUEST, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RTSP_SERVER_CSEQ", std::make_tuple(CURLOPT_RTSP_SERVER_CSEQ, CURLOPTTYPE_LONG)},
+  {"CURLOPT_RTSP_SESSION_ID", std::make_tuple(CURLOPT_RTSP_SESSION_ID, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_RTSP_STREAM_URI", std::make_tuple(CURLOPT_RTSP_STREAM_URI, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_RTSP_TRANSPORT", std::make_tuple(CURLOPT_RTSP_TRANSPORT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SASL_IR", std::make_tuple(CURLOPT_SASL_IR, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SOCKS5_GSSAPI_NEC", std::make_tuple(CURLOPT_SOCKS5_GSSAPI_NEC, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SOCKS5_GSSAPI_SERVICE", std::make_tuple(CURLOPT_SOCKS5_GSSAPI_SERVICE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSH_AUTH_TYPES", std::make_tuple(CURLOPT_SSH_AUTH_TYPES, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSH_COMPRESSION", std::make_tuple(CURLOPT_SSH_COMPRESSION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSH_HOST_PUBLIC_KEY_MD5", std::make_tuple(CURLOPT_SSH_HOST_PUBLIC_KEY_MD5, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSH_KNOWNHOSTS", std::make_tuple(CURLOPT_SSH_KNOWNHOSTS, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSH_PRIVATE_KEYFILE", std::make_tuple(CURLOPT_SSH_PRIVATE_KEYFILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSH_PUBLIC_KEYFILE", std::make_tuple(CURLOPT_SSH_PUBLIC_KEYFILE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLCERT", std::make_tuple(CURLOPT_SSLCERT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLCERTTYPE", std::make_tuple(CURLOPT_SSLCERTTYPE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSL_CIPHER_LIST", std::make_tuple(CURLOPT_SSL_CIPHER_LIST, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLENGINE", std::make_tuple(CURLOPT_SSLENGINE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLENGINE_DEFAULT", std::make_tuple(CURLOPT_SSLENGINE_DEFAULT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSLKEY", std::make_tuple(CURLOPT_SSLKEY, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLKEYTYPE", std::make_tuple(CURLOPT_SSLKEYTYPE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_SSLVERSION", std::make_tuple(CURLOPT_SSLVERSION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSL_OPTIONS", std::make_tuple(CURLOPT_SSL_OPTIONS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSL_SESSIONID_CACHE", std::make_tuple(CURLOPT_SSL_SESSIONID_CACHE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSL_VERIFYHOST", std::make_tuple(CURLOPT_SSL_VERIFYHOST, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSL_VERIFYPEER", std::make_tuple(CURLOPT_SSL_VERIFYPEER, CURLOPTTYPE_LONG)},
+  {"CURLOPT_SSL_VERIFYSTATUS", std::make_tuple(CURLOPT_SSL_VERIFYSTATUS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TCP_FASTOPEN", std::make_tuple(CURLOPT_TCP_FASTOPEN, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TCP_KEEPALIVE", std::make_tuple(CURLOPT_TCP_KEEPALIVE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TCP_KEEPIDLE", std::make_tuple(CURLOPT_TCP_KEEPIDLE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TCP_KEEPINTVL", std::make_tuple(CURLOPT_TCP_KEEPINTVL, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TCP_NODELAY", std::make_tuple(CURLOPT_TCP_NODELAY, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TFTP_BLKSIZE", std::make_tuple(CURLOPT_TFTP_BLKSIZE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TFTP_NO_OPTIONS", std::make_tuple(CURLOPT_TFTP_NO_OPTIONS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TIMECONDITION", std::make_tuple(CURLOPT_TIMECONDITION, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TIMEOUT", std::make_tuple(CURLOPT_TIMEOUT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TIMEOUT_MS", std::make_tuple(CURLOPT_TIMEOUT_MS, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TIMEVALUE", std::make_tuple(CURLOPT_TIMEVALUE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_TLSAUTH_PASSWORD", std::make_tuple(CURLOPT_TLSAUTH_PASSWORD, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_TLSAUTH_TYPE", std::make_tuple(CURLOPT_TLSAUTH_TYPE, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_TLSAUTH_USERNAME", std::make_tuple(CURLOPT_TLSAUTH_USERNAME, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_TRANSFERTEXT", std::make_tuple(CURLOPT_TRANSFERTEXT, CURLOPTTYPE_LONG)},
+  {"CURLOPT_UNIX_SOCKET_PATH", std::make_tuple(CURLOPT_UNIX_SOCKET_PATH, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_UNRESTRICTED_AUTH", std::make_tuple(CURLOPT_UNRESTRICTED_AUTH, CURLOPTTYPE_LONG)},
+  {"CURLOPT_UPLOAD", std::make_tuple(CURLOPT_UPLOAD, CURLOPTTYPE_LONG)},
+  {"CURLOPT_URL", std::make_tuple(CURLOPT_URL, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_USERAGENT", std::make_tuple(CURLOPT_USERAGENT, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_USERNAME", std::make_tuple(CURLOPT_USERNAME, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_USERPWD", std::make_tuple(CURLOPT_USERPWD, CURLOPTTYPE_STRINGPOINT)},
+  {"CURLOPT_USE_SSL", std::make_tuple(CURLOPT_USE_SSL, CURLOPTTYPE_LONG)},
+  {"CURLOPT_VERBOSE", std::make_tuple(CURLOPT_VERBOSE, CURLOPTTYPE_LONG)},
+  {"CURLOPT_WILDCARDMATCH", std::make_tuple(CURLOPT_WILDCARDMATCH, CURLOPTTYPE_LONG)}
+};
 
 // Status of registration of the system variable. Note that there should
 // be multiple such flags, if more system variables are intoduced, so
@@ -104,172 +262,6 @@ int unregister_status_variables() {
   return 0;
 }
 
-long get_global_followlocation() {
-  size_t var_len = 2;
-  char *buffer = new char[var_len];
-
-  int ret = mysql_service_component_sys_variable_register->get_variable(
-    LOG_COMPONENT_TAG, 
-    "curlopt_followlocation", 
-    (void **)&buffer, 
-    &var_len
-  );
-  if (ret != 0) {
-    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "get_variable failed");
-    return global_var_curl_followlocation;
-  }
-
-  global_var_curl_followlocation = std::stol(buffer);
-
-  std::stringstream ss_var_ptr;
-  ss_var_ptr << std::hex << reinterpret_cast<uintptr_t>(&global_var_curl_followlocation);
-  auto msg = "global buffer: 0x" + ss_var_ptr.str();
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
-  
-  return global_var_curl_followlocation;
-}
-
-static void update_variable_followlocation(MYSQL_THD thd [[maybe_unused]], SYS_VAR *self [[maybe_unused]], void *var_ptr, const void *save) {
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "update_variable_followlocation executed");
-
-  /*
-  std::stringstream ss_var_ptr, ss_var_curl_followlocation, ss_global_var_curl_followlocation;
-  ss_var_ptr << std::hex << reinterpret_cast<uintptr_t>(var_ptr);
-  ss_var_curl_followlocation << std::hex << reinterpret_cast<uintptr_t>(&var_curl_followlocation);
-  ss_global_var_curl_followlocation << std::hex << reinterpret_cast<uintptr_t>(&global_var_curl_followlocation);
-  auto msg = "var_ptr: 0x" + ss_var_ptr.str() + ", var_curl_followlocation: 0x" + ss_var_curl_followlocation.str() + ", global_var_curl_followlocation: 0x" + ss_global_var_curl_followlocation.str();
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
-  */
-
-  const long new_val = *(static_cast<const long *>(save));
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "setting httpclient.followlocation to ");
-
-  auto x = std::to_string(new_val);
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, x.c_str());
-
-  *(static_cast<long *>(var_ptr)) = new_val;
-
-  // PROBLEM: cant find a way to assign global_var_curl_followlocation if this is set global
-  // right now whenever set command is called for this variable, it changes thread-local variable here - which is not correct
-  var_curl_followlocation = new_val;
-}
-
-/**
-  Register the server system variables defined by this component.
-
-  @return Status
-  @retval false success
-  @retval true failure
-*/
-static bool register_system_variables() {
-  if (httpclient_component_sys_var_registered) {
-    // System variable is already registered.
-    return (false);
-  }
-
-  // defined different scopes for each variable otherwise INTEGRAL_CHECK_ARG produces error for same type
-  {
-    INTEGRAL_CHECK_ARG(ulong) timeout_ms_arg;
-    timeout_ms_arg.def_val = 30000;
-    timeout_ms_arg.min_val = 0;
-    timeout_ms_arg.max_val = 300000;
-    timeout_ms_arg.blk_sz = 0;
-
-    // register curl timeout variable
-    if (mysql_service_component_sys_variable_register->register_variable(
-          "httpclient", "curlopt_timeout_ms",
-          PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NOPERSIST,
-          "curl request timeout in milliseconds", 
-          nullptr,
-          nullptr, 
-          (void *)&timeout_ms_arg,
-          (void *)&var_curl_timeout_ms
-        )
-    ) {
-      LogEvent()
-          .type(LOG_TYPE_ERROR)
-          .prio(ERROR_LEVEL)
-          .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_timeout_ms register failed.");
-      
-      return (true);
-    }
-  }
-
-  {
-    INTEGRAL_CHECK_ARG(ulong) follow_location_arg;
-    follow_location_arg.def_val = 1;
-    follow_location_arg.min_val = 0;
-    follow_location_arg.max_val = 1;
-    follow_location_arg.blk_sz = 0;
-
-    // register follow redirect variable
-    if (mysql_service_component_sys_variable_register->register_variable(
-          "httpclient", "curlopt_followlocation",
-          PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NOPERSIST | PLUGIN_VAR_THDLOCAL,
-          "curl request follow redirects", 
-          nullptr,
-          update_variable_followlocation, 
-          (void *)&follow_location_arg,
-          //(void *)&var_curl_followlocation
-          nullptr
-        )
-    ) {
-      std::string msg{};
-      LogEvent()
-          .type(LOG_TYPE_ERROR)
-          .prio(ERROR_LEVEL)
-          .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_followlocation register failed.");
-      
-      return (true);
-    }
-  }
-
-  // System variable is registered successfully.
-  httpclient_component_sys_var_registered = true;
-
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "System variables has been registered successfully.");
-
-  return (false);
-}
-
-/**
-  Unregister the server system variables defined by this component.
-
-  @return Status
-  @retval false success
-  @retval true failure
-*/
-static bool unregister_system_variables() {
-  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "curlopt_timeout_ms")) {
-    if (!httpclient_component_sys_var_registered) {
-      return (false);
-    }
-
-    LogEvent()
-        .type(LOG_TYPE_ERROR)
-        .prio(ERROR_LEVEL)
-        .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_timeout_ms unregister failed.");
-    return (true);
-  }
-
-  if (mysql_service_component_sys_variable_unregister->unregister_variable("httpclient", "curlopt_followlocation")) {
-    if (!httpclient_component_sys_var_registered) {
-      return (false);
-    }
-
-    LogEvent()
-        .type(LOG_TYPE_ERROR)
-        .prio(ERROR_LEVEL)
-        .lookup(ER_LOG_PRINTF_MSG, "httpclient.curlopt_followlocation unregister failed.");
-    return (true);
-  }
-
-  // system variables are un-registered
-  httpclient_component_sys_var_registered = false;
-
-  return (false);
-}
-
 namespace udf_impl {
   const char *udf_init = "udf_init", *my_udf = "my_udf", *my_udf_clear = "my_clear", *my_udf_add = "my_udf_add";
 
@@ -311,10 +303,49 @@ namespace udf_impl {
     return total_size;
   }
 
-  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* content_type = "application/x-www-form-urlencoded") {
+  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* content_type = nullptr, const char* curl_options = nullptr) {
     CURL *curl = curl_easy_init();
     if (!curl) {
       return false;
+    }
+
+    // set all given curl options
+    if (curl_options != nullptr && strcmp(curl_options, "") != 0) {
+      try {
+        json curl_options_json = json::parse(curl_options);
+
+        for (auto& item : curl_options_json.items())
+        {
+          std::string opt_name = item.key();
+
+          auto it = curl_options_available.find(opt_name);
+          if (it == curl_options_available.end()) {
+            continue;
+          }
+
+          CURLoption opt_constant = std::get<0>(curl_options_available[opt_name]);
+          long opt_type = std::get<1>(curl_options_available[opt_name]);
+          auto opt_type_str = std::to_string(opt_type);
+
+          if (opt_type == CURLOPTTYPE_LONG) {
+            auto value = item.value().get<long>();
+            auto value_str = std::to_string(value);
+
+            curl_easy_setopt(curl, opt_constant, value);
+            LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, (opt_name + "#" + opt_type_str + " : " + value_str).c_str());
+          }
+          else if (opt_type == CURLOPTTYPE_STRINGPOINT) {
+            auto value = item.value().get<std::string>();
+            curl_easy_setopt(curl, opt_constant, value);
+            LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, (opt_name + " : " + value).c_str());
+          }
+        }
+        
+      } 
+      catch (const json::exception& e) {
+        std::string error = "JSON parsing error: " + std::string(e.what());
+        LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, error.c_str());
+      }
     }
 
     // set request method and url
@@ -339,17 +370,9 @@ namespace udf_impl {
     // set headers
     struct curl_slist *headers = NULL;
     const char * default_content_type = "application/x-www-form-urlencoded";
-    std::string header = "Content-Type: " + std::string((strcmp(content_type, "") == 0) ? default_content_type : content_type);
+    std::string header = "Content-Type: " + std::string(content_type == nullptr || (strcmp(content_type, "") == 0) ? default_content_type : content_type);
     headers = curl_slist_append(headers, header.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    // set other defined curl options
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, var_curl_timeout_ms);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, var_curl_followlocation);
-
-    auto x = std::to_string(var_curl_followlocation);
-    LogComponentErr(WARNING_LEVEL, ER_LOG_PRINTF_MSG, "var_curl_followlocation");
-    LogComponentErr(WARNING_LEVEL, ER_LOG_PRINTF_MSG, x.c_str());
 
     // set the callback function for writing the response data
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -398,13 +421,22 @@ namespace udf_impl {
       return 0;
     }
 
-    const char *request_method = args->args[0];
-    const char *request_url = args->args[1];
-    const char *request_body = args->args[2];
-    const char *request_content_type = args->args[3];
+    const char *request_method;
+    const char *request_url;
+    const char *request_body;
+    const char *request_content_type;
+    const char *curl_options;
+
+    auto arg_count = args->arg_count;
+
+    request_method = args->args[0];
+    request_url = args->args[1];
+    request_body = arg_count > 2 ? args->args[2] : "";
+    request_content_type = arg_count > 3 ? args->args[3] : "application/x-www-form-urlencoded";
+    curl_options = arg_count > 4 ? args->args[4] : "";
 
     std::string response;
-    if (perform_curl_request(response, request_method, request_url, request_body, request_content_type)) {
+    if (perform_curl_request(response, request_method, request_url, request_body, request_content_type, curl_options)) {
       // Copy the response to the output buffer
       initid->ptr = strdup(response.c_str());
       *length = response.size();
@@ -447,8 +479,6 @@ static mysql_service_status_t httpclient_service_init() {
     return 1;
   }
 
-  register_system_variables();
-
   return result;
 }
 
@@ -471,8 +501,6 @@ static mysql_service_status_t httpclient_service_deinit() {
   }
 
   delete my_udf_list;
-
-  unregister_system_variables();
 
   LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "uninstalled.");
 
