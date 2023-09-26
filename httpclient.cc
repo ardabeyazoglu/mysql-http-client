@@ -35,8 +35,9 @@ static SHOW_VAR httpclient_status_variables[] = {
 
 // configure curl options using mysql variables
 static long var_curl_timeout_ms = 30000;
-static long global_var_curl_followlocation;
-thread_local static long var_curl_followlocation;
+
+thread_local static long var_curl_followlocation = 1;
+static long global_var_curl_followlocation = 1;
 
 // Status of registration of the system variable. Note that there should
 // be multiple such flags, if more system variables are intoduced, so
@@ -104,11 +105,52 @@ int unregister_status_variables() {
   return 0;
 }
 
-static void update_variable_test(MYSQL_THD thd [[maybe_unused]], SYS_VAR *self [[maybe_unused]], void *var_ptr, const void *save) {
-  const long new_val = *(static_cast<const long *>(const_cast<void *>(save)));
-  var_curl_followlocation = new_val;
+long get_global_followlocation() {
+  size_t var_len = 2;
+  char *buffer = new char[var_len];
 
-  *(static_cast<long *>(var_ptr)) = *(static_cast<const long *>(save));
+  int ret = mysql_service_component_sys_variable_register->get_variable(
+    LOG_COMPONENT_TAG, 
+    "curlopt_followlocation", 
+    (void **)&buffer, 
+    &var_len
+  );
+  if (ret != 0) {
+    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "get_variable failed");
+    return global_var_curl_followlocation;
+  }
+
+  global_var_curl_followlocation = std::stol(buffer);
+
+  std::stringstream ss_var_ptr;
+  ss_var_ptr << std::hex << reinterpret_cast<uintptr_t>(&global_var_curl_followlocation);
+  auto msg = "global buffer: 0x" + ss_var_ptr.str();
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+  
+  return global_var_curl_followlocation;
+}
+
+static void update_variable_followlocation(MYSQL_THD thd [[maybe_unused]], SYS_VAR *self [[maybe_unused]], void *var_ptr, const void *save) {
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "update_variable_followlocation executed");
+
+  /*
+  std::stringstream ss_var_ptr, ss_var_curl_followlocation, ss_global_var_curl_followlocation;
+  ss_var_ptr << std::hex << reinterpret_cast<uintptr_t>(var_ptr);
+  ss_var_curl_followlocation << std::hex << reinterpret_cast<uintptr_t>(&var_curl_followlocation);
+  ss_global_var_curl_followlocation << std::hex << reinterpret_cast<uintptr_t>(&global_var_curl_followlocation);
+  auto msg = "var_ptr: 0x" + ss_var_ptr.str() + ", var_curl_followlocation: 0x" + ss_var_curl_followlocation.str() + ", global_var_curl_followlocation: 0x" + ss_global_var_curl_followlocation.str();
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+  */
+
+  const long new_val = *(static_cast<const long *>(save));
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "new httpclient.followlocation");
+
+  auto x = std::to_string(new_val);
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, x.c_str());
+
+  *(static_cast<long *>(var_ptr)) = new_val;
+
+  var_curl_followlocation = new_val;
 }
 
 /**
@@ -165,8 +207,9 @@ static bool register_system_variables() {
           PLUGIN_VAR_LONG | PLUGIN_VAR_MEMALLOC | PLUGIN_VAR_NOPERSIST | PLUGIN_VAR_THDLOCAL,
           "curl request follow redirects", 
           nullptr,
-          update_variable_test, 
+          update_variable_followlocation, 
           (void *)&follow_location_arg,
+          //(void *)&var_curl_followlocation
           nullptr
         )
     ) {
@@ -302,6 +345,10 @@ namespace udf_impl {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, var_curl_timeout_ms);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, var_curl_followlocation);
 
+    auto x = std::to_string(var_curl_followlocation);
+    LogComponentErr(WARNING_LEVEL, ER_LOG_PRINTF_MSG, "var_curl_followlocation");
+    LogComponentErr(WARNING_LEVEL, ER_LOG_PRINTF_MSG, x.c_str());
+
     // set the callback function for writing the response data
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
@@ -349,34 +396,10 @@ namespace udf_impl {
       return 0;
     }
 
-    // Prepare the URL for the HTTP request
     const char *request_method = args->args[0];
     const char *request_url = args->args[1];
     const char *request_body = args->args[2];
     const char *request_content_type = args->args[3];
-
-    {
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test0");
-      long * buffer;
-      size_t len = sizeof(buffer);
-      mysql_service_component_sys_variable_register->get_variable(LOG_COMPONENT_TAG, "curlopt_followlocation", (void **)&buffer, &len);
-
-      enum enum_variable_source source;
-      mysql_service_system_variable_source->get("httpclient.curlopt_followlocation", 2, &source);
-
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test1");
-      std::string buffer_str = std::to_string(*buffer);
-      const char* test = buffer_str.c_str();
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, test);
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test2");
-    }
-
-    {
-      std::string buffer_str = std::to_string(var_curl_followlocation);
-      const char* buffer_str_char = buffer_str.c_str();
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, buffer_str_char);
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "test3");
-    }
 
     std::string response;
     if (perform_curl_request(response, request_method, request_url, request_body, request_content_type)) {

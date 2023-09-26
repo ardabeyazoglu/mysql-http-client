@@ -19,6 +19,7 @@
 #include <list>
 #include <string>
 #include <iostream>
+#include <sstream>
 #include <chrono>
 #include <atomic>
 #include <cctype>
