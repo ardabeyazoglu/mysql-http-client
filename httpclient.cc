@@ -337,7 +337,8 @@ namespace udf_impl {
 
     // set headers
     struct curl_slist *headers = NULL;
-    std::string header = "Content-Type: " + std::string(content_type);
+    const char * default_content_type = "application/x-www-form-urlencoded";
+    std::string header = "Content-Type: " + std::string(content_type == "" ? default_content_type : content_type);
     headers = curl_slist_append(headers, header.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
