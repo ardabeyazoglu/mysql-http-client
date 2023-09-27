@@ -303,7 +303,7 @@ namespace udf_impl {
     return total_size;
   }
 
-  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* content_type = nullptr, const char* curl_options = nullptr) {
+  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* headers = nullptr, const char* curl_options = nullptr) {
     CURL *curl = curl_easy_init();
     if (!curl) {
       return false;
@@ -348,6 +348,34 @@ namespace udf_impl {
       }
     }
 
+    // set all given headers
+    if (headers != nullptr && strcmp(headers, "") != 0) {
+      struct curl_slist *headers;
+
+      try {
+        json headers_json = json::parse(headers);
+
+        for (auto& item : headers_json.items())
+        {
+          auto key = item.key();
+          auto value = item.value().get<std::string>();
+
+          auto header = key + ": " + value;
+          headers = curl_slist_append(headers, header.c_str());
+
+          LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, ("(Header) " + header).c_str());
+        }
+        
+        if (headers != nullptr) {
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        }
+      } 
+      catch (const json::exception& e) {
+        std::string error = "JSON parsing error: " + std::string(e.what());
+        LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, error.c_str());
+      }
+    }
+
     // set request method and url
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
@@ -366,13 +394,6 @@ namespace udf_impl {
     }
 
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
-
-    // set headers
-    struct curl_slist *headers = NULL;
-    const char * default_content_type = "application/x-www-form-urlencoded";
-    std::string header = "Content-Type: " + std::string(content_type == nullptr || (strcmp(content_type, "") == 0) ? default_content_type : content_type);
-    headers = curl_slist_append(headers, header.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
     // set the callback function for writing the response data
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -424,19 +445,19 @@ namespace udf_impl {
     const char *request_method;
     const char *request_url;
     const char *request_body;
-    const char *request_content_type;
+    const char *request_headers;
     const char *curl_options;
 
     auto arg_count = args->arg_count;
 
     request_method = args->args[0];
     request_url = args->args[1];
-    request_body = arg_count > 2 ? args->args[2] : "";
-    request_content_type = arg_count > 3 ? args->args[3] : "application/x-www-form-urlencoded";
-    curl_options = arg_count > 4 ? args->args[4] : "";
+    request_body = arg_count > 2 ? args->args[2] : nullptr;
+    request_headers = arg_count > 3 ? args->args[3] : nullptr;
+    curl_options = arg_count > 4 ? args->args[4] : nullptr;
 
     std::string response;
-    if (perform_curl_request(response, request_method, request_url, request_body, request_content_type, curl_options)) {
+    if (perform_curl_request(response, request_method, request_url, request_body, request_headers, curl_options)) {
       // Copy the response to the output buffer
       initid->ptr = strdup(response.c_str());
       *length = response.size();
