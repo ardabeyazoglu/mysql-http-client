@@ -228,21 +228,27 @@ class udf_list {
       /* try to unregister all of the udfs */
       for (auto udf : set) {
         int was_present = 0;
-        if (!mysql_service_udf_registration->udf_unregister(udf.c_str(), &was_present) || !was_present)
+        if (!mysql_service_udf_registration->udf_unregister(udf.c_str(), &was_present) || !was_present) {
           delete_set.push_back(udf);
+        }
       }
 
       /* remove the unregistered ones from the list */
-      for (auto udf : delete_set) set.remove(udf);
+      for (auto udf : delete_set) {
+        set.remove(udf);
+      }
 
       /* success: empty set */
-      if (set.empty()) return false;
+      if (set.empty()) {
+        return false;
+      }
 
       /* failure: entries still in the set */
       return true;
     }
 
-} * my_udf_list;
+};
+udf_list *my_udf_list;
 
 int register_status_variables() {
   if (mysql_service_status_variable_registration->register_variable((SHOW_VAR *)&httpclient_status_variables)) {
@@ -263,7 +269,10 @@ int unregister_status_variables() {
 }
 
 namespace udf_impl {
-  const char *udf_init = "udf_init", *my_udf = "my_udf", *my_udf_clear = "my_clear", *my_udf_add = "my_udf_add";
+  const char *udf_init = "udf_init", 
+    *my_udf = "my_udf", 
+    *my_udf_clear = "my_clear", 
+    *my_udf_add = "my_udf_add";
 
   static bool httpclient_udf_init(UDF_INIT *initid, UDF_ARGS *, char *) {
     const char* name = "utf8mb4";
@@ -278,13 +287,13 @@ namespace udf_impl {
 
   static void httpclient_udf_deinit(__attribute__((unused)) UDF_INIT *initid) {
     assert(initid->ptr == udf_impl::udf_init || initid->ptr == udf_impl::my_udf);
-    free(initid->ptr);
   }
 
   bool has_privilege(void *opaque_thd) {
     // get the security context of the thread
     Security_context_handle ctx = nullptr;
     if (mysql_service_mysql_thd_security_context->get(opaque_thd, &ctx) || !ctx) {
+      // mysql_service_mysql_security_context_options->get(ctx, "priv_user", &user);
       LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "problem trying to get security context");
       return false;
     }
@@ -330,14 +339,11 @@ namespace udf_impl {
           if (opt_type == CURLOPTTYPE_LONG) {
             auto value = item.value().get<long>();
             auto value_str = std::to_string(value);
-
             curl_easy_setopt(curl, opt_constant, value);
-            LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, (opt_name + "#" + opt_type_str + " : " + value_str).c_str());
           }
           else if (opt_type == CURLOPTTYPE_STRINGPOINT) {
             auto value = item.value().get<std::string>();
             curl_easy_setopt(curl, opt_constant, value);
-            LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, (opt_name + " : " + value).c_str());
           }
         }
         
@@ -350,7 +356,7 @@ namespace udf_impl {
 
     // set all given headers
     if (headers != nullptr && strcmp(headers, "") != 0) {
-      struct curl_slist *headers;
+      struct curl_slist *header_list;
 
       try {
         json headers_json = json::parse(headers);
@@ -361,13 +367,11 @@ namespace udf_impl {
           auto value = item.value().get<std::string>();
 
           auto header = key + ": " + value;
-          headers = curl_slist_append(headers, header.c_str());
-
-          LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, ("(Header) " + header).c_str());
+          header_list = curl_slist_append(header_list, header.c_str());
         }
         
-        if (headers != nullptr) {
-          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        if (header_list != nullptr) {
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
         }
       } 
       catch (const json::exception& e) {
@@ -405,7 +409,7 @@ namespace udf_impl {
     auto end_time = std::chrono::steady_clock::now();
 
     long http_status_code;
-    const char *http_error_message;
+    const char *http_error_message = "";
 
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
     if (res != CURLE_OK) {
@@ -464,6 +468,11 @@ namespace udf_impl {
     } 
     else {
       // If the request fails, return an error message
+      mysql_error_service_printf(ER_GET_ERRMSG, 0, 0, response.c_str(), "curl request");
+      *error = 1;
+      *is_null = 1;
+      return 0;
+      
       auto error_message = "HTTP request failed: " + response;
       initid->ptr = strdup(error_message.c_str());
       *length = error_message.size();
