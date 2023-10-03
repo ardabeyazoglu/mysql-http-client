@@ -312,7 +312,7 @@ namespace udf_impl {
     return total_size;
   }
 
-  bool perform_curl_request(std::string &response, const char *method, const char *url, const char *data = nullptr, const char* headers = nullptr, const char* curl_options = nullptr) {
+  bool perform_curl_request(UDF_INIT *initid, const char *method, const char *url, const char *data = nullptr, const char* headers = nullptr, const char* curl_options = nullptr) {
     CURL *curl = curl_easy_init();
     if (!curl) {
       return false;
@@ -400,6 +400,7 @@ namespace udf_impl {
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
 
     // set the callback function for writing the response data
+    std::string response;
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     
@@ -432,6 +433,8 @@ namespace udf_impl {
     auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     time_spent += elapsed_time;
 
+    initid->ptr = strdup(response.c_str());
+
     return res == CURLE_OK;
   }
 
@@ -446,38 +449,135 @@ namespace udf_impl {
       return 0;
     }
 
-    const char *request_method;
-    const char *request_url;
-    const char *request_body;
-    const char *request_headers;
+    const char *method;
+    const char *url;
+    const char *body;
+    const char *headers;
     const char *curl_options;
 
     auto arg_count = args->arg_count;
 
-    request_method = args->args[0];
-    request_url = args->args[1];
-    request_body = arg_count > 2 ? args->args[2] : nullptr;
-    request_headers = arg_count > 3 ? args->args[3] : nullptr;
+    method = args->args[0];
+    url = args->args[1];
+    body = arg_count > 2 ? args->args[2] : nullptr;
+    headers = arg_count > 3 ? args->args[3] : nullptr;
     curl_options = arg_count > 4 ? args->args[4] : nullptr;
 
-    std::string response;
-    if (perform_curl_request(response, request_method, request_url, request_body, request_headers, curl_options)) {
-      // Copy the response to the output buffer
-      initid->ptr = strdup(response.c_str());
-      *length = response.size();
-    } 
-    else {
-      // If the request fails, return an error message
-      mysql_error_service_printf(ER_GET_ERRMSG, 0, 0, response.c_str(), "curl request");
+    CURL *curl;
+    long http_status_code = -1;
+
+    try {
+      curl = curl_easy_init();
+      if (!curl) {
+        throw "curl init failed";
+      }
+
+      // set all given curl options
+      if (curl_options != nullptr && strcmp(curl_options, "") != 0) {
+        json curl_options_json = json::parse(curl_options);
+
+        for (auto& item : curl_options_json.items())
+        {
+          std::string opt_name = item.key();
+
+          auto it = curl_options_available.find(opt_name);
+          if (it == curl_options_available.end()) {
+            continue;
+          }
+
+          CURLoption opt_constant = std::get<0>(curl_options_available[opt_name]);
+          long opt_type = std::get<1>(curl_options_available[opt_name]);
+          auto opt_type_str = std::to_string(opt_type);
+
+          if (opt_type == CURLOPTTYPE_LONG) {
+            auto value = item.value().get<long>();
+            auto value_str = std::to_string(value);
+            curl_easy_setopt(curl, opt_constant, value);
+          }
+          else if (opt_type == CURLOPTTYPE_STRINGPOINT) {
+            auto value = item.value().get<std::string>();
+            curl_easy_setopt(curl, opt_constant, value);
+          }
+        }
+      }
+
+      // set all given headers
+      if (headers != nullptr && strcmp(headers, "") != 0) {
+        struct curl_slist *header_list;
+        json headers_json = json::parse(headers);
+
+        for (auto& item : headers_json.items())
+        {
+          auto key = item.key();
+          auto value = item.value().get<std::string>();
+          auto header = key + ": " + value;
+          auto header_chr = header.c_str();
+          header_list = curl_slist_append(header_list, header_chr);
+        }
+        
+        if (header_list != nullptr) {
+          curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
+        }
+      }
+
+      // set request method and url
+      curl_easy_setopt(curl, CURLOPT_URL, url);
+
+      std::string method_upper = method;
+      std::transform(method_upper.begin(), method_upper.end(), method_upper.begin(), ::toupper);
+
+      if (method_upper == "POST") {
+        curl_easy_setopt(curl, CURLOPT_POST, 1);
+      }
+      else if (method_upper == "PUT" || method_upper == "PATCH" || method_upper == "DELETE") {
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method_upper);
+      }
+      else {
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+      }
+
+      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+
+      // set the callback function for writing the response data
+      std::string response;
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+      
+      // send the request
+      auto start_time = std::chrono::steady_clock::now();
+      CURLcode res = curl_easy_perform(curl);
+      auto end_time = std::chrono::steady_clock::now();
+
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status_code);
+      
+      curl_easy_cleanup(curl);
+
+      // log to mysql error log
+      if (res != CURLE_OK) {
+        auto http_error_message = curl_easy_strerror(res);
+        std::string msg = std::string(method) + " " + std::string(url) + " failed with error code " + std::to_string(http_status_code) + ": " + std::string(http_error_message);
+        throw std::runtime_error(msg);
+      }
+      else {
+        std::string msg = std::string(method) + " " + std::string(url) + " returned status code " + std::to_string(http_status_code);
+        LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+
+        initid->ptr = strdup(response.c_str());
+        *length = response.size();
+      }
+
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+      time_spent += elapsed_time;
+    }
+    catch (const std::exception& ex) {
+      auto msg = std::string(ex.what());
+      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+      mysql_error_service_printf(ER_GET_ERRMSG, 0, http_status_code, msg.c_str(), "curl request");
       *error = 1;
       *is_null = 1;
-      return 0;
-      
-      auto error_message = "HTTP request failed: " + response;
-      initid->ptr = strdup(error_message.c_str());
-      *length = error_message.size();
     }
-    
+
     return initid->ptr;
   }
 }
