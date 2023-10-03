@@ -503,7 +503,7 @@ namespace udf_impl {
 
       // set all given headers
       if (headers != nullptr && strcmp(headers, "") != 0) {
-        struct curl_slist *header_list;
+        auto *header_list = new curl_slist;
         json headers_json = json::parse(headers);
 
         for (auto& item : headers_json.items())
