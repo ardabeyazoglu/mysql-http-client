@@ -257,6 +257,7 @@ int register_status_variables() {
     return 1;
   }
   LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "Status variable(s) registered");
+
   return 0;
 }
 
@@ -270,10 +271,13 @@ int unregister_status_variables() {
 }
 
 namespace udf_impl {
-  const char *udf_init = "udf_init", 
+  const char 
+    *udf_init = "udf_init", 
     *my_udf = "my_udf", 
     *my_udf_clear = "my_clear", 
     *my_udf_add = "my_udf_add";
+
+  thread_local bool nowait = false;
 
   static bool httpclient_udf_init(UDF_INIT *initid, UDF_ARGS *, char *) {
     const char* name = "utf8mb4";
@@ -324,19 +328,15 @@ namespace udf_impl {
       return 0;
     }
 
-    const char *method;
-    const char *url;
-    const char *body;
-    const char *headers;
-    const char *curl_options;
-
     auto arg_count = args->arg_count;
 
-    method = args->args[0];
-    url = args->args[1];
-    body = arg_count > 2 ? args->args[2] : nullptr;
-    headers = arg_count > 3 ? args->args[3] : nullptr;
-    curl_options = arg_count > 4 ? args->args[4] : nullptr;
+    const char *method = args->args[0];
+    const char *url = args->args[1];
+    const char *body = arg_count > 2 ? args->args[2] : nullptr;
+    const char *headers = arg_count > 3 ? args->args[3] : nullptr;
+    const char *curl_options = arg_count > 4 ? args->args[4] : nullptr;
+    const bool fire_and_forget = nowait;
+    nowait = false;
 
     CURL *curl;
     long http_status_code = -1;
@@ -345,6 +345,10 @@ namespace udf_impl {
       curl = curl_easy_init();
       if (!curl) {
         throw "curl init failed";
+      }
+
+      if (nowait) {
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1);
       }
 
       // set all given curl options
@@ -377,8 +381,8 @@ namespace udf_impl {
       }
 
       // set all given headers
-      /*if (headers != nullptr && strcmp(headers, "") != 0) {
-        auto *header_list = new curl_slist;
+      if (headers != nullptr && strcmp(headers, "") != 0) {
+        struct curl_slist* header_list = NULL;
         json headers_json = json::parse(headers);
 
         for (auto& item : headers_json.items())
@@ -393,7 +397,7 @@ namespace udf_impl {
         if (header_list != nullptr) {
           curl_easy_setopt(curl, CURLOPT_HTTPHEADER, header_list);
         }
-      }*/
+      }
 
       // set request method and url
       curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -412,7 +416,9 @@ namespace udf_impl {
         curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
       }
 
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+      if (body != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+      }
 
       // set the callback function for writing the response data
       std::string response;
@@ -434,27 +440,40 @@ namespace udf_impl {
         std::string msg = std::string(method) + " " + std::string(url) + " failed with error code " + std::to_string(http_status_code) + ": " + std::string(http_error_message);
         throw std::runtime_error(msg);
       }
-      else {
-        std::string msg = std::string(method) + " " + std::string(url) + " returned status code " + std::to_string(http_status_code);
-        LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
-
-        initid->ptr = strdup(response.c_str());
-        *length = response.size();
-      }
+      
+      std::string msg = std::string(method) + " " + std::string(url) + " returned status code " + std::to_string(http_status_code);
+      LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
 
       auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
       time_spent_ms += elapsed_time;
       number_of_requests++;
+
+      // since message size is possibly bigger than 255, "outp" buffer is not usable (e.g. memcpy(outp, response.c_str()))
+      // we must a dynamically allocated buffer defined in init function
+      initid->ptr = strdup(response.c_str());
+      *length = response.size();
     }
     catch (const std::exception& ex) {
+      initid->ptr = NULL;
+
       auto msg = std::string(ex.what());
-      LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
-      mysql_error_service_printf(ER_GET_ERRMSG, 0, http_status_code, msg.c_str(), "curl request");
-      *error = 1;
-      *is_null = 1;
+      if (fire_and_forget && msg == "Timeout was reached") {
+        // bypass timeout error to allow fire and forget  
+      }
+      else {
+        LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
+        mysql_error_service_printf(ER_GET_ERRMSG, 0, http_status_code, msg.c_str(), "curl request");
+        *error = 1;
+        *is_null = 1;
+      }
     }
 
     return initid->ptr;
+  }
+
+  const char *httpclient_request_nowait_udf(UDF_INIT *initid, UDF_ARGS *args, char *outp, unsigned long *length, char *is_null, char *error) {
+    nowait = true;
+    return httpclient_request_udf(initid, args, outp, length, is_null, error);
   }
 }
 
@@ -480,6 +499,12 @@ static mysql_service_status_t httpclient_service_init() {
   my_udf_list = new udf_list();
 
   if (my_udf_list->add_scalar("http_request", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
+    // failure: UDF registration failed
+    delete my_udf_list;
+    return 1;
+  }
+
+  if (my_udf_list->add_scalar("http_request_nowait", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_nowait_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
     // failure: UDF registration failed
     delete my_udf_list;
     return 1;

@@ -43,12 +43,20 @@ This component extends MySQL with http/curl support and installs an `http_reques
 
 ## Usage
 
-    # example http requests
+    # example basic get request
     mysql> SELECT http_request('GET', 'https://dummyjson.com/products?limit=1');
-    mysql> SET GLOBAL httpclient.curlopt_timeout_ms = 1000; SELECT http_request('GET', 'https://dummyjson.com/products?limit=1');
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2');
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}');
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}', '{"CURLOPT_AUTHORIZATION":"Bearer XXX"}');
 
     # example using json parser
     mysql> SELECT JSON_VALUE(http_request('GET', 'https://dummyjson.com/products?limit=1'), '$.products[0].description');
+
+    # example with json table
+    mysql> SELECT * FROM JSON_TABLE(http_request('GET', 'https://dummyjson.com/products?limit=10'), '$.products[*]' COLUMNS(rowIndex FOR ORDINALITY, id INT PATH '$.id', title VARCHAR(100) PATH '$.title')) AS test;
+
+    # example fire and forget (no timeout error)
+    mysql> SELECT http_request_nowait('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2');
 
     # time spent in http requests
     mysql> SHOW GLOBAL STATUS LIKE '%httpclient%';
