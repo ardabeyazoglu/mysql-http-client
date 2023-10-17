@@ -329,6 +329,12 @@ namespace udf_impl {
     }
 
     auto arg_count = args->arg_count;
+    if (arg_count < 2) {
+      mysql_error_service_printf(ER_AUDIT_LOG_UDF_INVALID_ARGUMENT_COUNT, 0);
+      *error = 1;
+      *is_null = 1;
+      return 0;
+    }
 
     const char *method = args->args[0];
     const char *url = args->args[1];
