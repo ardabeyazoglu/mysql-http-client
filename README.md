@@ -25,7 +25,6 @@ This component extends MySQL with http/curl support and installs an `http_reques
 
     # build httpclient component once and everytime it is modified
     cd mysql-server/BIN-DEBUG
-    cmake .. -DDOWNLOAD_BOOST=1 -DWITH_BOOST=../downloads
     make component_httpclient
 
 ## Test
@@ -44,19 +43,19 @@ This component extends MySQL with http/curl support and installs an `http_reques
 ## Usage
 
     # example basic get request
-    mysql> SELECT http_request('GET', 'https://dummyjson.com/products?limit=1');
-    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2');
-    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}');
-    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}', '{"CURLOPT_AUTHORIZATION":"Bearer XXX"}');
+    mysql> SELECT http_request('GET', 'https://dummyjson.com/products?limit=1') AS response;
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2') AS response;
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}') AS response;
+    mysql> SELECT http_request('POST', 'https://httpbin.org/anything', '{"param1":"value1","param2":"value2"}', '{"Content-Type":"application/json"}', '{"CURLOPT_AUTHORIZATION":"Bearer XXX"}') AS response;
 
     # example using json parser
-    mysql> SELECT JSON_VALUE(http_request('GET', 'https://dummyjson.com/products?limit=1'), '$.products[0].description');
+    mysql> SELECT JSON_VALUE(http_request('GET', 'https://dummyjson.com/products?limit=1'), '$.products[0].description') AS response;
 
     # example with json table
-    mysql> SELECT * FROM JSON_TABLE(http_request('GET', 'https://dummyjson.com/products?limit=10'), '$.products[*]' COLUMNS(rowIndex FOR ORDINALITY, id INT PATH '$.id', title VARCHAR(100) PATH '$.title')) AS test;
+    mysql> SELECT * FROM JSON_TABLE(http_request('GET', 'https://dummyjson.com/products?limit=10'), '$.products[*]' COLUMNS(rowIndex FOR ORDINALITY, id INT PATH '$.id', title VARCHAR(100) PATH '$.title')) AS response;
 
     # example fire and forget (no timeout error)
-    mysql> SELECT http_request_nowait('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2');
+    mysql> SELECT http_request_nowait('POST', 'https://httpbin.org/anything', 'param1=value1&param2=value2') AS response;
 
     # time spent in http requests
     mysql> SHOW GLOBAL STATUS LIKE '%httpclient%';

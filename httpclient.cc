@@ -1,3 +1,4 @@
+// define mysql component name
 #define LOG_COMPONENT_TAG "httpclient"
 #define NO_SIGNATURE_CHANGE 0
 #define SIGNATURE_CHANGE 1
@@ -6,6 +7,7 @@
 
 using json = nlohmann::json;
 
+// declare which services are required for this component
 REQUIRES_SERVICE_PLACEHOLDER(log_builtins);
 REQUIRES_SERVICE_PLACEHOLDER(log_builtins_string);
 REQUIRES_SERVICE_PLACEHOLDER(dynamic_privilege_register);
@@ -17,15 +19,15 @@ REQUIRES_SERVICE_PLACEHOLDER(global_grants_check);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_current_thread_reader);
 REQUIRES_SERVICE_PLACEHOLDER(mysql_runtime_error);
 REQUIRES_SERVICE_PLACEHOLDER(status_variable_registration);
-REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_register);
-REQUIRES_SERVICE_PLACEHOLDER(component_sys_variable_unregister);
 
+// declare log builtins to allow logging to error log
 SERVICE_TYPE(log_builtins) * log_bi;
 SERVICE_TYPE(log_builtins_string) * log_bs;
 
+// define a custom privilege name required to call UDFs defined in this component
 static const char *HTTPCLIENT_PRIVILEGE_NAME = "HTTP_CLIENT";
 
-// keep a global status variable for time spent in http requests
+// define global status variables
 static unsigned long long time_spent_ms = 0;
 static unsigned long number_of_requests = 0;
 
@@ -34,6 +36,7 @@ static SHOW_VAR httpclient_status_variables[] = {
   {"httpclient.number_of_requests", (char *)&number_of_requests, SHOW_LONG, SHOW_SCOPE_GLOBAL}
 };
 
+// define all supported curl options that are int, long and string types
 static std::map<std::string, std::tuple<CURLoption, long>> curl_options_available = {
   {"CURLOPT_ACCEPTTIMEOUT_MS", std::make_tuple(CURLOPT_ACCEPTTIMEOUT_MS, CURLOPTTYPE_LONG)},
   {"CURLOPT_ACCEPT_ENCODING", std::make_tuple(CURLOPT_ACCEPT_ENCODING, CURLOPTTYPE_STRINGPOINT)},
@@ -197,36 +200,34 @@ static std::map<std::string, std::tuple<CURLoption, long>> curl_options_availabl
   {"CURLOPT_WILDCARDMATCH", std::make_tuple(CURLOPT_WILDCARDMATCH, CURLOPTTYPE_LONG)}
 };
 
-// Status of registration of the system variable. Note that there should
-// be multiple such flags, if more system variables are intoduced, so
-// that we can keep track of the register/unregister status for each
-// variable.
-static std::atomic<bool> httpclient_component_sys_var_registered{false};
-
-// udf configuration
-class udf_list {
-  typedef std::list<std::string> udf_list_t;
+// define a udf management class to configure functions
+class udf_manager {
+  typedef std::list<std::string> string_list;
 
   private:
-    udf_list_t set;
+    string_list set;
 
   public:
-    ~udf_list() { 
-      unregister(); 
+    ~udf_manager() { 
+      unregister_all_functions(); 
     }
 
-    bool add_scalar(const char *func_name, enum Item_result return_type, Udf_func_any func, Udf_func_init init_func = NULL, Udf_func_deinit deinit_func = NULL) {
+    // register given function
+    bool register_function(const char *func_name, enum Item_result return_type, Udf_func_any func, Udf_func_init init_func = NULL, Udf_func_deinit deinit_func = NULL) {
       if (!mysql_service_udf_registration->udf_register(func_name, return_type, func, init_func, deinit_func)) {
         set.push_back(func_name);
-        return false;
+
+        // registration is successful
+        return true;
       }
-      return true;
+      
+      return false;
     }
 
-    bool unregister() {
-      udf_list_t delete_set;
+    // unregister all previously registered functions in this component
+    bool unregister_all_functions() {
+      string_list delete_set;
       
-      /* try to unregister all of the udfs */
       for (auto udf : set) {
         int was_present = 0;
         if (!mysql_service_udf_registration->udf_unregister(udf.c_str(), &was_present) || !was_present) {
@@ -234,51 +235,27 @@ class udf_list {
         }
       }
 
-      /* remove the unregistered ones from the list */
       for (auto udf : delete_set) {
         set.remove(udf);
       }
 
-      /* success: empty set */
+      // successful if list of functions is empty
       if (set.empty()) {
-        return false;
+        return true;
       }
 
-      /* failure: entries still in the set */
-      return true;
+      return false;
     }
 
 };
-udf_list *my_udf_list;
-
-int register_status_variables() {
-  if (mysql_service_status_variable_registration->register_variable((SHOW_VAR *)&httpclient_status_variables)) {
-    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "Failed to register status variable");
-    return 1;
-  }
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "Status variable(s) registered");
-
-  return 0;
-}
-
-int unregister_status_variables() {
-  if (mysql_service_status_variable_registration->unregister_variable((SHOW_VAR *)&httpclient_status_variables)) {
-    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "Failed to unregister status variable");
-    return 1;
-  }
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "Status variable(s) unregistered");
-  return 0;
-}
+udf_manager *my_udf_manager;
 
 namespace udf_impl {
-  const char 
-    *udf_init = "udf_init", 
-    *my_udf = "my_udf", 
-    *my_udf_clear = "my_clear", 
-    *my_udf_add = "my_udf_add";
+  const char *udf_init = "udf_init", *my_udf = "my_udf";
 
   thread_local bool nowait = false;
 
+  // initialize any given function
   static bool httpclient_udf_init(UDF_INIT *initid, UDF_ARGS *, char *) {
     const char* name = "utf8mb4";
     char *value = const_cast<char*>(name);
@@ -290,15 +267,16 @@ namespace udf_impl {
     return 0;
   }
 
+  // initialize any given function
   static void httpclient_udf_deinit(__attribute__((unused)) UDF_INIT *initid) {
     assert(initid->ptr == udf_impl::udf_init || initid->ptr == udf_impl::my_udf);
   }
 
+  // check if privilege is granted for current user
   bool has_privilege(void *opaque_thd) {
     // get the security context of the thread
     Security_context_handle ctx = nullptr;
     if (mysql_service_mysql_thd_security_context->get(opaque_thd, &ctx) || !ctx) {
-      // mysql_service_mysql_security_context_options->get(ctx, "priv_user", &user);
       LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "problem trying to get security context");
       return false;
     }
@@ -310,6 +288,7 @@ namespace udf_impl {
     return false;
   }
 
+  // curl write function
   size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t total_size = size * nmemb;
     std::string *response = static_cast<std::string *>(userp);
@@ -317,6 +296,7 @@ namespace udf_impl {
     return total_size;
   }
 
+  // perform curl request with given options
   const char *httpclient_request_udf(UDF_INIT *initid, UDF_ARGS *args, char *outp, unsigned long *length, char *is_null, char *error) {
     MYSQL_THD thd;
     mysql_service_mysql_current_thread_reader->get(&thd);
@@ -477,76 +457,95 @@ namespace udf_impl {
     return initid->ptr;
   }
 
+  // perform curl request and do not wait for response
   const char *httpclient_request_nowait_udf(UDF_INIT *initid, UDF_ARGS *args, char *outp, unsigned long *length, char *is_null, char *error) {
     nowait = true;
     return httpclient_request_udf(initid, args, outp, length, is_null, error);
   }
 }
 
+// initialize the component
 static mysql_service_status_t httpclient_service_init() {
   mysql_service_status_t result = 0;
 
   log_bi = mysql_service_log_builtins;
   log_bs = mysql_service_log_builtins_string;
 
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "initializing…");
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "started initializing the component");
 
-  register_status_variables();
+  // register custom status variables
+  if (mysql_service_status_variable_registration->register_variable((SHOW_VAR *)&httpclient_status_variables)) {
+    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "failed to register status variable(s)");
+  }
+  else {
+    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "status variable(s) registered");
+  }
 
-  // Registration of the privilege
+  // register a custom privilege
   if (mysql_service_dynamic_privilege_register->register_privilege(HTTPCLIENT_PRIVILEGE_NAME, strlen(HTTPCLIENT_PRIVILEGE_NAME))) {
-    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "could not register privilege 'HTTP_CLIENT'.");
+    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "failed to register privilege 'HTTP_CLIENT'");
     result = 1;
   } 
   else {
-    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "new privilege 'HTTP_CLIENT' has been registered successfully.");
+    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "new privilege 'HTTP_CLIENT' has been registered successfully");
   }
 
-  my_udf_list = new udf_list();
-
-  if (my_udf_list->add_scalar("http_request", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
-    // failure: UDF registration failed
-    delete my_udf_list;
+  // register user defined functions
+  my_udf_manager = new udf_manager();
+  if (!my_udf_manager->register_function("http_request", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
+    // failed to register udf
+    delete my_udf_manager;
     return 1;
   }
 
-  if (my_udf_list->add_scalar("http_request_nowait", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_nowait_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
-    // failure: UDF registration failed
-    delete my_udf_list;
+  if (!my_udf_manager->register_function("http_request_nowait", Item_result::STRING_RESULT, (Udf_func_any)udf_impl::httpclient_request_nowait_udf, udf_impl::httpclient_udf_init, udf_impl::httpclient_udf_deinit)) {
+    // failed to register udf
+    delete my_udf_manager;
     return 1;
   }
 
   return result;
 }
 
+// de-initialize the component and cleanup
 static mysql_service_status_t httpclient_service_deinit() {
-  mysql_service_status_t result = 0;
+  mysql_service_status_t deinit_result = 0;
 
-  unregister_status_variables();
-
-  if (mysql_service_dynamic_privilege_register->unregister_privilege(HTTPCLIENT_PRIVILEGE_NAME, strlen(HTTPCLIENT_PRIVILEGE_NAME))) {
-    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "could not unregister privilege 'HTTP_CLIENT'.");
-    result = 1;
-  } 
+  // unregister custom status variables
+  if (mysql_service_status_variable_registration->unregister_variable((SHOW_VAR *)&httpclient_status_variables)) {
+    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "failed to unregister status variable(s)");
+  }
   else {
-    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "privilege 'HTTP_CLIENT' has been unregistered successfully.");
+    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "status variable(s) unregistered");
   }
 
-  // failure: some UDFs still in use
-  if (my_udf_list->unregister()) {
+  // unregister custom privileges
+  if (mysql_service_dynamic_privilege_register->unregister_privilege(HTTPCLIENT_PRIVILEGE_NAME, strlen(HTTPCLIENT_PRIVILEGE_NAME))) {
+    LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, "failed to unregister privilege 'HTTP_CLIENT'");
+    deinit_result = 1;
+  } 
+  else {
+    LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "privilege 'HTTP_CLIENT' has been unregistered successfully");
+  }
+
+  // unregister all user defined functions
+  if (!my_udf_manager->unregister_all_functions()) {
+    // failed to unregister some functions
     return 1;
   }
 
-  delete my_udf_list;
+  delete my_udf_manager;
 
-  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "uninstalled.");
+  LogComponentErr(INFORMATION_LEVEL, ER_LOG_PRINTF_MSG, "component is now fully uninstalled");
 
-  return result;
+  return deinit_result;
 }
 
+// declare list of services defined
 BEGIN_COMPONENT_PROVIDES(httpclient_service)
 END_COMPONENT_PROVIDES();
 
+// declare which services are required for this component
 BEGIN_COMPONENT_REQUIRES(httpclient_service)
   REQUIRES_SERVICE(log_builtins),
   REQUIRES_SERVICE(log_builtins_string),
@@ -558,25 +557,21 @@ BEGIN_COMPONENT_REQUIRES(httpclient_service)
   REQUIRES_SERVICE(mysql_current_thread_reader),
   REQUIRES_SERVICE(mysql_runtime_error),
   REQUIRES_SERVICE(status_variable_registration),
-  REQUIRES_SERVICE(component_sys_variable_register),
-  REQUIRES_SERVICE(component_sys_variable_unregister),
 END_COMPONENT_REQUIRES();
 
-// A list of metadata to describe the Component.
+// declare component metadata
 BEGIN_COMPONENT_METADATA(httpclient_service)
   METADATA("mysql.author", "Arda Beyazoglu"),
   METADATA("mysql.dev", "ardabeyazoglu"),
   METADATA("mysql.license", "MIT"), 
 END_COMPONENT_METADATA();
 
-// Declaration of the Component.
 DECLARE_COMPONENT(httpclient_service, "mysql:httpclient_service")
   httpclient_service_init,
-  httpclient_service_deinit END_DECLARE_COMPONENT();
+  httpclient_service_deinit 
+END_DECLARE_COMPONENT();
 
-/* 
-Defines list of Components contained in this library. Note that for now
-we assume that library will have exactly one Component. 
-*/
-DECLARE_LIBRARY_COMPONENTS &COMPONENT_REF(httpclient_service)
-  END_DECLARE_LIBRARY_COMPONENTS
+// declare list of components defined
+DECLARE_LIBRARY_COMPONENTS 
+  &COMPONENT_REF(httpclient_service)
+END_DECLARE_LIBRARY_COMPONENTS
