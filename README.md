@@ -1,7 +1,7 @@
 mysql-http-client
 =================
 
-An **experimental** curl extension based on MySQL 8's component infrastracture. 
+An **experimental** curl plugin based on MySQL 8's component infrastracture. 
 
 This component extends MySQL with http/curl support and installs two http request UDFs:
 
