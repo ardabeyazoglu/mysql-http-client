@@ -1,11 +1,14 @@
 mysql-http-client
 =================
 
-An ``experimental`` curl extension based on MySQL 8's component infrastracture. 
+An **experimental** curl extension based on MySQL 8's component infrastracture. 
 
-This component extends MySQL with http/curl support and installs an `http_request` function.
+This component extends MySQL with http/curl support and installs two http request UDFs:
 
-``CAUTION``: <ins>Not tested in production.</ins>
+1. ``http_request(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http requests
+2. ``http_request_nowait(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http request but does not wait for response nor fail on timeout
+
+<ins>CAUTION: Not tested in production.</ins>
 
 ## Usage
 
