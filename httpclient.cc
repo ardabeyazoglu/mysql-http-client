@@ -333,7 +333,7 @@ namespace udf_impl {
         throw "curl init failed";
       }
 
-      if (nowait) {
+      if (fire_and_forget) {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 1);
       }
 
@@ -443,8 +443,8 @@ namespace udf_impl {
       initid->ptr = NULL;
 
       auto msg = std::string(ex.what());
-      if (fire_and_forget && msg == "Timeout was reached") {
-        // bypass timeout error to allow fire and forget  
+      if (fire_and_forget && msg.find("Timeout") != std::string::npos) {
+        // bypass timeout error to allow fire and forget
       }
       else {
         LogComponentErr(ERROR_LEVEL, ER_LOG_PRINTF_MSG, msg.c_str());
