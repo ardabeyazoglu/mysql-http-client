@@ -76,5 +76,13 @@ First download component_httpclient.so and place it in mysql plugin directory (/
     # $SOCKET_NAME is printed by previous command
     mysql -uroot -S $SOCKET_NAME
 
+## Contributions
 
+There is still room for improvement. Feel free to write an issue, fork the repo and send a pull request.
 
+Ideas could be:
+
+- Store each request meta data and response status in a performance_schema table with a ttl.
+- Better error handling
+- Port some neat features from [pg_net](https://github.com/supabase/pg_net)
+- ...
