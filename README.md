@@ -1,14 +1,14 @@
 mysql-http-client
 =================
 
-An **experimental** curl plugin based on MySQL 8's component infrastracture. 
+A MySQL 8 component that enables synchronous http(s) requests using SQL functions. 
 
 This component extends MySQL with http/curl support and installs two http request UDFs:
 
 1. ``http_request(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http requests
 2. ``http_request_nowait(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http request but does not wait for response nor fail on timeout
 
-<ins>DISCLAIMER: Not tested in production. Use it carefully.</ins>
+<ins>E: Not tested in production. Use it carefully.</ins>
 
 ## Usage
 
@@ -80,9 +80,7 @@ First download component_httpclient.so and place it in mysql plugin directory (/
 
 There is still room for improvement. Feel free to write an issue, fork the repo and send a pull request.
 
-Ideas could be:
+Some improvements could be:
 
 - Store each request meta data and response status in a performance_schema table with a ttl.
-- Better error handling
-- Port some neat features from [pg_net](https://github.com/supabase/pg_net)
-- ...
+- Add async (non-blocking) support similar to [pg_net](https://github.com/supabase/pg_net)
