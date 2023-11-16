@@ -8,8 +8,6 @@ This component extends MySQL with http/curl support and installs two http reques
 1. ``http_request(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http requests
 2. ``http_request_nowait(METHOD, URL, BODY, HEADERS, CURL_OPTIONS)`` : sends http request but does not wait for response nor fail on timeout
 
-<ins>E: Not tested in production. Use it carefully.</ins>
-
 ## Usage
 
 First download component_httpclient.so and place it in mysql plugin directory (/usr/lib/mysql/plugin) then connect to mysql.
